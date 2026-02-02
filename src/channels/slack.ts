@@ -11,6 +11,7 @@ import { config } from '../config/index.js';
 import { createModuleLogger } from '../utils/logger.js';
 import { processMessage, AgentContext } from '../agents/agent.js';
 import { taskScheduler } from '../tools/scheduler.js';
+import { getOrCreateSession as dbGetOrCreateSession, isUserApproved, generatePairingCode, approvePairing } from '../memory/database.js';
 
 const logger = createModuleLogger('slack');
 
@@ -26,19 +27,9 @@ export const webClient = new WebClient(config.slack.botToken);
 
 let botUserId: string | null = null;
 
-// In-memory session storage
-const sessions: Map<string, { id: string; createdAt: number }> = new Map();
-
 function getOrCreateSession(userId: string, channelId: string, threadTs: string | null): { id: string } {
-  const key = `${userId}:${channelId}:${threadTs || 'main'}`;
-  let session = sessions.get(key);
-
-  if (!session) {
-    session = { id: key, createdAt: Date.now() };
-    sessions.set(key, session);
-  }
-
-  return session;
+  const session = dbGetOrCreateSession(userId, channelId, threadTs);
+  return { id: session.id };
 }
 
 async function getBotUserId(): Promise<string> {
@@ -117,6 +108,15 @@ slackApp.message(async ({ message, say }) => {
     return;
   }
 
+  // DM security check (if pairing policy is enabled)
+  if (isDM && config.security.dmPolicy === 'pairing' && !isUserApproved(user)) {
+    const code = generatePairingCode(user);
+    await say({
+      text: `To use this bot in DMs, please get approved by an admin.\n\nYour pairing code: \`${code}\`\n\nAsk an admin to approve you in a channel with: \`approve ${code}\``,
+    });
+    return;
+  }
+
   const cleanText = isDM ? text : removeBotMention(text, currentBotId);
 
   // Handle help command
@@ -149,6 +149,18 @@ slackApp.message(async ({ message, say }) => {
     const success = taskScheduler.cancelTask(taskId, user);
     await say({
       text: success ? `Task ${taskId} cancelled.` : `Could not cancel task ${taskId}.`,
+      thread_ts: thread_ts || ts,
+    });
+    return;
+  }
+
+  // Handle pairing code approval (admin command)
+  const approveMatch = cleanText.match(/approve ([A-Z0-9]{6})/i);
+  if (approveMatch && !isDM) {
+    const code = approveMatch[1].toUpperCase();
+    const success = approvePairing(code, user);
+    await say({
+      text: success ? `Pairing code \`${code}\` approved!` : `Invalid or expired pairing code: \`${code}\``,
       thread_ts: thread_ts || ts,
     });
     return;

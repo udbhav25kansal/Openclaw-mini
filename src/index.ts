@@ -13,6 +13,8 @@ import { initializeVectorStore, startIndexer, stopIndexer, getDocumentCount } fr
 import { startSlackApp, stopSlackApp } from './channels/slack.js';
 import { taskScheduler } from './tools/scheduler.js';
 import { initializeMCP, shutdownMCP, isMCPEnabled, getConnectedServers } from './mcp/index.js';
+import { initializeDatabase, closeDatabase } from './memory/database.js';
+import { initializeMemory, isMemoryEnabled } from './memory-ai/index.js';
 
 const logger = createModuleLogger('main');
 
@@ -22,6 +24,19 @@ async function main(): Promise<void> {
   logger.info('='.repeat(50));
 
   try {
+    // Initialize database
+    logger.info('Initializing database...');
+    initializeDatabase();
+
+    // Initialize mem0 memory
+    if (config.memory.enabled) {
+      logger.info('Initializing mem0 memory...');
+      await initializeMemory();
+      logger.info(`Memory: ${isMemoryEnabled() ? 'Enabled' : 'Disabled (initialization failed)'}`);
+    } else {
+      logger.info('Memory system disabled');
+    }
+
     // Initialize RAG system
     if (config.rag.enabled) {
       logger.info('Initializing RAG system...');
@@ -56,6 +71,7 @@ async function main(): Promise<void> {
     logger.info('Slack AI Assistant is running!');
     logger.info('='.repeat(50));
     logger.info(`RAG: ${config.rag.enabled ? 'Enabled' : 'Disabled'}`);
+    logger.info(`Memory: ${isMemoryEnabled() ? 'Enabled' : 'Disabled'}`);
     logger.info(`MCP: ${isMCPEnabled() ? `Enabled (${getConnectedServers().join(', ')})` : 'Disabled'}`);
     logger.info(`Model: ${config.ai.defaultModel}`);
     logger.info('='.repeat(50));
@@ -78,6 +94,7 @@ async function shutdown(signal: string): Promise<void> {
       stopIndexer();
     }
 
+    closeDatabase();
     logger.info('Shutdown complete');
     process.exit(0);
   } catch (error: any) {

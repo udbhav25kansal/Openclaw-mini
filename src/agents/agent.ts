@@ -32,26 +32,30 @@ import {
   mcpToolsToOpenAI,
   formatMCPResult,
 } from '../mcp/index.js';
+import {
+  addMessage as dbAddMessage,
+  getSessionHistory as dbGetSessionHistory,
+} from '../memory/database.js';
+import {
+  searchMemory,
+  addMemory,
+  buildMemoryContext,
+  isMemoryEnabled,
+} from '../memory-ai/index.js';
 
 const logger = createModuleLogger('agent');
 
 const openaiClient = new OpenAI({ apiKey: config.ai.openaiApiKey });
 
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-const sessionHistory: Map<string, Message[]> = new Map();
-
-function getSessionHistory(sessionId: string): Message[] {
-  return sessionHistory.get(sessionId) || [];
+function getSessionHistory(sessionId: string): Array<{ role: 'user' | 'assistant'; content: string }> {
+  const messages = dbGetSessionHistory(sessionId, config.app.maxHistoryMessages);
+  return messages
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 }
 
 function addMessage(sessionId: string, role: 'user' | 'assistant', content: string): void {
-  const history = sessionHistory.get(sessionId) || [];
-  history.push({ role, content });
-  sessionHistory.set(sessionId, history);
+  dbAddMessage(sessionId, role, content);
 }
 
 const SYSTEM_PROMPT = `You are a helpful AI assistant integrated into Slack.
@@ -322,7 +326,9 @@ export async function processMessage(
   let ragContext = '';
   let ragUsed = false;
   let sourcesCount = 0;
+  let memoryContext = '';
 
+  // Retrieve RAG context
   if (config.rag.enabled && shouldUseRAG(userMessage)) {
     logger.info('RAG triggered for query');
 
@@ -345,11 +351,33 @@ export async function processMessage(
     }
   }
 
+  // Retrieve mem0 long-term memory
+  if (isMemoryEnabled()) {
+    try {
+      const memories = await searchMemory(userMessage, context.userId, 5);
+      if (memories.length > 0) {
+        memoryContext = buildMemoryContext(memories);
+        logger.info(`Memory found ${memories.length} relevant facts about user`);
+      }
+    } catch (error: any) {
+      logger.error(`Memory retrieval failed: ${error.message}`);
+    }
+  }
+
   const history = getSessionHistory(context.sessionId);
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: 'system', content: SYSTEM_PROMPT },
   ];
 
+  // Add memory context (what we know about the user)
+  if (memoryContext) {
+    messages.push({
+      role: 'system',
+      content: memoryContext
+    });
+  }
+
+  // Add RAG context (relevant Slack history)
   if (ragContext) {
     messages.push({
       role: 'system',
@@ -409,6 +437,17 @@ export async function processMessage(
   const content = assistantMessage?.content || 'I encountered an error processing your request.';
 
   addMessage(context.sessionId, 'assistant', content);
+
+  // Store memories from this conversation (async, don't block response)
+  if (isMemoryEnabled()) {
+    addMemory(
+      [
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content },
+      ],
+      context.userId
+    ).catch(err => logger.error(`Failed to store memory: ${err.message}`));
+  }
 
   return {
     content,
