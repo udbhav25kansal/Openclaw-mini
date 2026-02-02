@@ -76,6 +76,7 @@ interface SlackMessage {
   thread_ts?: string;
   subtype?: string;
   bot_id?: string;
+  reply_count?: number;
 }
 
 /**
@@ -193,7 +194,7 @@ async function indexChannel(
     });
 
     const messages = (result.messages || []) as SlackMessage[];
-    
+
     if (messages.length === 0) {
       logger.debug(`No new messages in ${channelName}`);
       return { indexed: 0, errors: 0 };
@@ -201,20 +202,39 @@ async function indexChannel(
 
     logger.debug(`Found ${messages.length} messages in ${channelName}`);
 
+    // Also fetch thread replies for messages that have threads
+    const allMessages: SlackMessage[] = [...messages];
+    for (const message of messages) {
+      if (message.reply_count && message.reply_count > 0) {
+        try {
+          const threadResult = await slackClient.conversations.replies({
+            channel: channelId,
+            ts: message.ts,
+            limit: 100,
+          });
+          const replies = (threadResult.messages || []) as SlackMessage[];
+          // Skip the first message (it's the parent, already in messages)
+          for (const reply of replies.slice(1)) {
+            allMessages.push(reply);
+          }
+          logger.debug(`Fetched ${replies.length - 1} thread replies for message ${message.ts}`);
+        } catch (error: any) {
+          logger.warn(`Failed to fetch thread replies: ${error.message}`);
+        }
+      }
+    }
+
+    logger.debug(`Total messages including threads: ${allMessages.length}`);
+
     // Filter and prepare messages for indexing
     const documentsToIndex: {
       message: SlackMessage;
       processedText: string;
     }[] = [];
 
-    for (const message of messages) {
-      // Skip system messages
-      if (message.subtype) {
-        continue;
-      }
-
-      // Skip bot messages (optional)
-      if (message.bot_id) {
+    for (const message of allMessages) {
+      // Skip system messages (joins, leaves, etc.) but allow bot messages
+      if (message.subtype && message.subtype !== 'bot_message') {
         continue;
       }
 
@@ -265,9 +285,15 @@ async function indexChannel(
           const { message, processedText } = batch[j];
           const embedding = embeddings[j];
 
-          // Get user info
+          // Get user info (handle bot messages differently)
           let userName = 'unknown';
-          if (message.user) {
+          let userId = message.user || 'unknown';
+
+          if (message.bot_id) {
+            // This is a bot message
+            userName = 'Openclaw Bot';
+            userId = message.bot_id;
+          } else if (message.user) {
             const userInfo = await getUserInfo(message.user);
             userName = userInfo?.realName || userInfo?.name || 'unknown';
           }
@@ -276,7 +302,7 @@ async function indexChannel(
           const metadata: DocumentMetadata = {
             channelId,
             channelName,
-            userId: message.user || 'unknown',
+            userId,
             userName,
             timestamp: new Date(parseFloat(message.ts) * 1000).toISOString(),
             messageTs: message.ts,

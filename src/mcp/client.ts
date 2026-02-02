@@ -113,9 +113,11 @@ async function connectServer(config: MCPServerConfig): Promise<void> {
   };
 
   // Spawn the server process
+  // Use shell: true for Windows compatibility (npx -> npx.cmd)
   const proc = spawn(config.command, config.args || [], {
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
+    shell: true,
   });
 
   const server: MCPServer = {
@@ -133,9 +135,9 @@ async function connectServer(config: MCPServerConfig): Promise<void> {
     handleServerOutput(server, data.toString());
   });
 
-  // Handle stderr (server logs)
+  // Handle stderr (server logs) - log at info level to see errors
   proc.stderr?.on('data', (data: Buffer) => {
-    logger.debug(`[${config.name}] ${data.toString().trim()}`);
+    logger.info(`[${config.name} stderr] ${data.toString().trim()}`);
   });
 
   // Handle process exit
@@ -310,7 +312,7 @@ export async function executeMCPTool(
       arguments: args,
     });
 
-    logger.debug(`Tool result: ${JSON.stringify(result)}`);
+    logger.info(`Tool result: ${JSON.stringify(result).substring(0, 500)}`);
     return result;
 
   } catch (error: any) {
