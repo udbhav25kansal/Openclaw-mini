@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd project structure with RAG, Memory, and MCP architecture\n\n- Add architecture documentation \\(ARCHITECTURE.md, rag.md, memory.md, mcp.md\\)\n- Implement RAG module: embeddings, vectorstore, indexer, retriever\n- Add config module with Zod validation\n- Add Winston logger utility\n- Add Slack API operations \\(slack-actions.ts\\)\n- Set up project structure for Memory and MCP modules \\(stubs\\)\n- Add main entry point with RAG initialization\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)"
+    ]
+  }
+}
