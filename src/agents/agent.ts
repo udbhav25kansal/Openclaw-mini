@@ -24,6 +24,14 @@ import {
   scheduleMessage,
   setReminder,
 } from '../tools/slack-actions.js';
+import {
+  getAllMCPTools,
+  executeMCPTool,
+  parseToolName,
+  isMCPEnabled,
+  mcpToolsToOpenAI,
+  formatMCPResult,
+} from '../mcp/index.js';
 
 const logger = createModuleLogger('agent');
 
@@ -61,6 +69,10 @@ const SYSTEM_PROMPT = `You are a helpful AI assistant integrated into Slack.
 - set_reminder: Set reminders
 - list_channels: See available channels
 - list_users: See workspace users
+
+### External Integrations (MCP):
+- GitHub tools (prefixed with github_): Create issues, manage PRs, search repos
+- Notion tools (prefixed with notion_): Create pages, search databases, manage content
 
 ## Response Format:
 - Be concise
@@ -282,8 +294,16 @@ async function executeTool(
         return `Users (${users.length}):\n${list}${users.length > 20 ? '\n...' : ''}`;
       }
 
-      default:
+      default: {
+        // Check if it's an MCP tool
+        const parsed = parseToolName(name);
+        if (parsed && isMCPEnabled()) {
+          logger.info(`Executing MCP tool: ${parsed.serverName}/${parsed.toolName}`);
+          const result = await executeMCPTool(parsed.serverName, parsed.toolName, args);
+          return formatMCPResult(result);
+        }
         return `Unknown tool: ${name}`;
+      }
     }
   } catch (error: any) {
     logger.error(`Tool execution failed: ${name}`, { error });
@@ -346,8 +366,10 @@ export async function processMessage(
 
   messages.push({ role: 'user', content: userMessage });
 
-  const tools = SLACK_TOOLS;
-  logger.info(`Calling LLM with ${tools.length} tools`);
+  // Combine Slack tools with MCP tools
+  const mcpTools = isMCPEnabled() ? mcpToolsToOpenAI(getAllMCPTools()) : [];
+  const tools = [...SLACK_TOOLS, ...mcpTools];
+  logger.info(`Calling LLM with ${tools.length} tools (${SLACK_TOOLS.length} Slack + ${mcpTools.length} MCP)`);
 
   let response = await openaiClient.chat.completions.create({
     model: config.ai.defaultModel.includes('gpt') ? config.ai.defaultModel : 'gpt-4o',
