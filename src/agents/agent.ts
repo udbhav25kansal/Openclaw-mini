@@ -36,6 +36,7 @@ import {
   addMessage as dbAddMessage,
   getSessionHistory as dbGetSessionHistory,
 } from '../memory/database.js';
+import { taskScheduler } from '../tools/scheduler.js';
 import {
   searchMemory,
   addMemory,
@@ -280,9 +281,143 @@ async function executeTool(
       }
 
       case 'set_reminder': {
-        const result = await setReminder(context.userId, args.text as string, args.time as string);
+        const timeStr = args.time as string;
+        const lowerTime = timeStr.toLowerCase();
+
+        // Check if this is a recurring reminder (every day, every monday, etc.)
+        const isRecurring = lowerTime.includes('every');
+
+        if (isRecurring) {
+          logger.info('Recurring reminder detected, using task scheduler');
+
+          // Parse time from the string (e.g., "every tuesday at 1:43 pm")
+          const timeMatch = lowerTime.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+          let hours = 9, mins = 0; // Default 9am
+
+          if (timeMatch) {
+            hours = parseInt(timeMatch[1]);
+            mins = parseInt(timeMatch[2] || '0');
+            const ampm = timeMatch[3]?.toLowerCase();
+            if (ampm === 'pm' && hours < 12) hours += 12;
+            if (ampm === 'am' && hours === 12) hours = 0;
+          }
+
+          // Build cron expression based on pattern
+          let cronExpression = '';
+          let scheduleDescription = '';
+
+          const dayMap: Record<string, number> = {
+            'sunday': 0, 'sun': 0,
+            'monday': 1, 'mon': 1,
+            'tuesday': 2, 'tue': 2, 'tues': 2,
+            'wednesday': 3, 'wed': 3,
+            'thursday': 4, 'thu': 4, 'thurs': 4,
+            'friday': 5, 'fri': 5,
+            'saturday': 6, 'sat': 6,
+          };
+
+          // Check for specific day
+          for (const [dayName, dayNum] of Object.entries(dayMap)) {
+            if (lowerTime.includes(dayName)) {
+              cronExpression = `${mins} ${hours} * * ${dayNum}`;
+              scheduleDescription = `every ${dayName} at ${hours}:${mins.toString().padStart(2, '0')}`;
+              break;
+            }
+          }
+
+          // Check for "every day"
+          if (lowerTime.includes('every day') || lowerTime.includes('daily')) {
+            cronExpression = `${mins} ${hours} * * *`;
+            scheduleDescription = `every day at ${hours}:${mins.toString().padStart(2, '0')}`;
+          }
+
+          // Check for weekday/weekend
+          if (lowerTime.includes('weekday')) {
+            cronExpression = `${mins} ${hours} * * 1-5`;
+            scheduleDescription = `every weekday at ${hours}:${mins.toString().padStart(2, '0')}`;
+          }
+          if (lowerTime.includes('weekend')) {
+            cronExpression = `${mins} ${hours} * * 0,6`;
+            scheduleDescription = `every weekend at ${hours}:${mins.toString().padStart(2, '0')}`;
+          }
+
+          if (!cronExpression) {
+            return `Could not parse recurring schedule from "${timeStr}". Try "every monday at 9am" or "every day at 2pm".`;
+          }
+
+          // Use task scheduler for recurring reminders
+          const task = await taskScheduler.scheduleTask(
+            context.userId,
+            context.channelId || context.userId,
+            `⏰ *Reminder*: ${args.text}`,
+            null, // No one-time scheduled time
+            cronExpression,
+            context.threadTs
+          );
+
+          return `✅ Recurring reminder set! I'll remind you "${args.text}" ${scheduleDescription}. (Task ID: ${task.id})`;
+        }
+
+        // Try native Slack reminders first
+        const result = await setReminder(context.userId, args.text as string, timeStr);
+
+        // If no user token, fall back to scheduled DM
+        if (!result.success && result.error === 'NO_USER_TOKEN') {
+          logger.info('No user token for reminders, falling back to scheduled DM');
+
+          const now = new Date();
+          let sendAt: Date;
+
+          if (lowerTime.includes('minute')) {
+            const mins = parseInt(lowerTime.match(/(\d+)/)?.[1] || '5');
+            sendAt = new Date(now.getTime() + mins * 60 * 1000);
+          } else if (lowerTime.includes('hour')) {
+            const hours = parseInt(lowerTime.match(/(\d+)/)?.[1] || '1');
+            sendAt = new Date(now.getTime() + hours * 60 * 60 * 1000);
+          } else if (lowerTime.includes('tomorrow')) {
+            sendAt = new Date(now);
+            sendAt.setDate(sendAt.getDate() + 1);
+            const timeMatch = lowerTime.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+            if (timeMatch) {
+              let hours = parseInt(timeMatch[1]);
+              const mins = parseInt(timeMatch[2] || '0');
+              const ampm = timeMatch[3]?.toLowerCase();
+              if (ampm === 'pm' && hours < 12) hours += 12;
+              if (ampm === 'am' && hours === 12) hours = 0;
+              sendAt.setHours(hours, mins, 0, 0);
+            } else {
+              sendAt.setHours(9, 0, 0, 0);
+            }
+          } else {
+            const timeMatch = lowerTime.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+            if (timeMatch) {
+              let hours = parseInt(timeMatch[1]);
+              const mins = parseInt(timeMatch[2] || '0');
+              const ampm = timeMatch[3]?.toLowerCase();
+              if (ampm === 'pm' && hours < 12) hours += 12;
+              if (ampm === 'am' && hours === 12) hours = 0;
+              sendAt = new Date(now);
+              sendAt.setHours(hours, mins, 0, 0);
+              if (sendAt <= now) {
+                sendAt.setDate(sendAt.getDate() + 1);
+              }
+            } else {
+              sendAt = new Date(now.getTime() + 5 * 60 * 1000);
+            }
+          }
+
+          const reminderText = `⏰ *Reminder*: ${args.text}`;
+          const scheduleResult = await scheduleMessage(`@${context.userId}`, reminderText, sendAt);
+
+          if (scheduleResult.success) {
+            return `✅ Reminder scheduled! I'll DM you "${args.text}" at ${sendAt.toLocaleString()}`;
+          } else {
+            return `Failed to schedule reminder: ${scheduleResult.error}`;
+          }
+        }
+
         return result.success
-          ? `Reminder set: "${args.text}" at ${args.time}`
+          ? `✅ Reminder set: "${args.text}" at ${args.time}`
           : `Failed: ${result.error}`;
       }
 
