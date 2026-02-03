@@ -352,8 +352,10 @@ export async function processMessage(
   }
 
   // Retrieve mem0 long-term memory
+  logger.debug(`Memory enabled check: ${isMemoryEnabled()}`);
   if (isMemoryEnabled()) {
     try {
+      logger.info(`Fetching memories for user ${context.userId}`);
       const memories = await searchMemory(userMessage, context.userId, 5);
       if (memories.length > 0) {
         memoryContext = buildMemoryContext(memories);
