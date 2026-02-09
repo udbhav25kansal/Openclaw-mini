@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import Database, { Database as DatabaseType } from 'better-sqlite3';
 import { config } from '../config/index.js';
 import { createModuleLogger } from '../utils/logger.js';
 import { mkdirSync, existsSync } from 'fs';
@@ -13,7 +13,7 @@ if (!existsSync(dbDir)) {
 }
 
 // Initialize database
-const db = new Database(config.app.databasePath);
+const db: DatabaseType = new Database(config.app.databasePath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
@@ -383,7 +383,7 @@ export function verifyPairingCode(code: string): string | null {
   const result = db.prepare(`
     SELECT user_id FROM pairing_codes
     WHERE code = ? AND expires_at > ? AND approved = 0
-  `).get(code.toUpperCase()) as { user_id: string } | undefined;
+  `).get(code.toUpperCase(), now) as { user_id: string } | undefined;
 
   return result?.user_id || null;
 }

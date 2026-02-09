@@ -24,6 +24,7 @@ import {
   scheduleMessage,
   setReminder,
 } from '../tools/slack-actions.js';
+import { fetchUrlContent } from '../tools/web-fetcher.js';
 import {
   getAllMCPTools,
   executeMCPTool,
@@ -75,6 +76,11 @@ const SYSTEM_PROMPT = `You are a helpful AI assistant integrated into Slack.
 - list_channels: See available channels
 - list_users: See workspace users
 
+### Web Content:
+- fetch_url_content: Fetch and read content from URLs/links shared in conversation
+- Use this when users share links and ask about them, or need information from web pages
+- Supports HTML pages, JSON APIs, and plain text
+
 ### External Integrations (MCP):
 - GitHub tools (prefixed with github_): Create issues, manage PRs, search repos
 - Notion tools (prefixed with notion_): Create pages, search databases, manage content
@@ -82,7 +88,8 @@ const SYSTEM_PROMPT = `You are a helpful AI assistant integrated into Slack.
 ## Response Format:
 - Be concise
 - Use Slack formatting: *bold*, _italic_, \`code\`
-- Cite sources when using search results`;
+- Cite sources when using search results
+- When summarizing web content, mention the source title/site`;
 
 const SLACK_TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
   {
@@ -185,6 +192,32 @@ const SLACK_TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
       name: 'list_users',
       description: 'List all users in the workspace',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fetch_url_content',
+      description: 'Fetch and extract content from a URL. Use this when users share links, reference web pages, or when you need to understand content from a website. Supports HTML pages, JSON, and plain text.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: {
+            type: 'string',
+            description: 'The URL to fetch (must be http:// or https://)',
+          },
+          extract_type: {
+            type: 'string',
+            enum: ['text', 'metadata'],
+            description: 'What to extract: "text" for full content (default), "metadata" for title/description/author only',
+          },
+          max_length: {
+            type: 'number',
+            description: 'Maximum characters to return (default 6000, max 10000)',
+          },
+        },
+        required: ['url'],
+      },
     },
   },
 ];
@@ -431,6 +464,53 @@ async function executeTool(
         const users = await listUsers();
         const list = users.slice(0, 20).map(u => `- ${u.realName} (@${u.name})`).join('\n');
         return `Users (${users.length}):\n${list}${users.length > 20 ? '\n...' : ''}`;
+      }
+
+      case 'fetch_url_content': {
+        const url = args.url as string;
+        const extractType = (args.extract_type as 'text' | 'metadata') || 'text';
+        let maxLength = (args.max_length as number) || 6000;
+
+        // Cap max_length at 10000 to avoid overwhelming context
+        if (maxLength > 10000) maxLength = 10000;
+
+        const result = await fetchUrlContent(url, {
+          extractType,
+          maxLength,
+          timeoutMs: 15000,
+        });
+
+        if (!result.success) {
+          return `Failed to fetch URL: ${result.error}`;
+        }
+
+        const parts: string[] = [];
+
+        if (result.title) {
+          parts.push(`Title: ${result.title}`);
+        }
+
+        if (result.metadata?.siteName) {
+          parts.push(`Site: ${result.metadata.siteName}`);
+        }
+
+        if (result.metadata?.author) {
+          parts.push(`Author: ${result.metadata.author}`);
+        }
+
+        if (result.metadata?.publishedDate) {
+          parts.push(`Published: ${result.metadata.publishedDate}`);
+        }
+
+        if (result.metadata?.description) {
+          parts.push(`Description: ${result.metadata.description}`);
+        }
+
+        if (result.content && extractType !== 'metadata') {
+          parts.push(`\nContent:\n${result.content}`);
+        }
+
+        return parts.join('\n') || 'No content extracted from URL.';
       }
 
       default: {

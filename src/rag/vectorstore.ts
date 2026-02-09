@@ -45,9 +45,6 @@ import { dirname, join } from 'path';
 
 const logger = createModuleLogger('vectorstore');
 
-// Collection name for Slack messages
-const COLLECTION_NAME = 'slack_messages';
-
 /**
  * Document metadata stored alongside embeddings.
  * This enables filtering searches by channel, user, time, etc.

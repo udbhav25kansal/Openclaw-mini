@@ -54,10 +54,9 @@
  * Provide to LLM as context
  */
 
-import { config } from '../config/index.js';
 import { createModuleLogger } from '../utils/logger.js';
 import { createEmbedding, preprocessText } from './embeddings.js';
-import { search, SearchResult, getDocuments } from './vectorstore.js';
+import { search, SearchResult } from './vectorstore.js';
 
 const logger = createModuleLogger('retriever');
 
@@ -147,9 +146,11 @@ export async function retrieve(
     channelName,
     channelId,
     userId,
-    includeContext = false,
-    contextWindow = 2,
+    // Future: includeContext and contextWindow for surrounding messages
+    includeContext: _includeContext = false,
+    contextWindow: _contextWindow = 2,
   } = options;
+  void _includeContext; void _contextWindow; // Suppress unused warnings (planned feature)
 
   logger.info(`Retrieving for query: "${query.substring(0, 50)}..."${channelName ? ` in #${channelName}` : ''}`);
 

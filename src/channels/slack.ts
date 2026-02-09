@@ -206,6 +206,12 @@ slackApp.message(async ({ message, say }) => {
 slackApp.event('app_mention', async ({ event, say }) => {
   const { user, channel, ts, thread_ts, text } = event;
 
+  // Skip if no user (shouldn't happen, but TypeScript requires the check)
+  if (!user) {
+    logger.warn('Received app_mention without user');
+    return;
+  }
+
   logger.info(`App mentioned by ${user} in ${channel}`);
 
   const currentBotId = await getBotUserId();
